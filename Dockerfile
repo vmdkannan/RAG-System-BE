@@ -7,10 +7,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    git \
     libmagic1 \
-    gcc \
-    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file first (for better caching)

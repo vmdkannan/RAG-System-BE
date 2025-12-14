@@ -1,9 +1,88 @@
+# # Core ML and NLP libraries
+# torch==2.2.0
+# transformers==4.40.0
+# tokenizers>=0.19.1
+# sentence-transformers==2.7.0
+# faiss-cpu==1.8.0
+
+# # LangChain ecosystem
+# langchain==0.2.0
+# langchain-community==0.2.0
+# langchain-text-splitters==0.2.0
+# langchain-huggingface==0.0.3
+
+# # Document processing (without heavy local-inference)
+# unstructured==0.13.0
+
+# # Web framework
+# flask==3.0.0
+# flask-cors==4.0.0
+# werkzeug==3.0.1
+
+# # Vector Database - OpenSearch
+# opensearch-py==2.4.2
+
+# # Utilities
+# requests==2.31.0
+# numpy==1.26.4
+# beautifulsoup4==4.12.3
+# lxml==5.1.0
+# python-dotenv==1.0.0
+
+
+# # MISSING: Accelerate for optimized inference
+# accelerate==0.27.0
+
+# # MISSING: For 8-bit quantization (optional but recommended)
+# bitsandbytes==0.43.0
+
+# # MISSING: For better model loading and performance
+# safetensors==0.4.2
+
+
+# # MISSING: HTML parsing dependencies
+# html5lib==1.1
+
+# # MISSING: Additional text processing
+# nltk==3.8.1
+# # MISSING: For better regex operations
+# regex==2023.12.25
+
+# # MISSING: Data manipulation (helpful for processing)
+# pandas==2.2.0
+
+# # MISSING: For handling timeouts and retries
+# urllib3==2.2.0
+
+# # MISSING: For YAML config files (optional)
+# pyyaml==6.0.1
+
+# # MISSING: Protobuf for model serialization
+# protobuf==4.25.3
+
+# # MISSING: Typing extensions for better type hints
+# typing-extensions==4.9.0
+
+# # MISSING: Packaging utilities
+# packaging==23.2
+
+# # MISSING: File type detection
+# python-magic==0.4.27
+
+# # MISSING: Additional document loaders
+# pypdf==4.0.2
+# docx2txt==0.8
+
+
 # Core ML and NLP libraries
 torch==2.2.0
 transformers==4.40.0
 tokenizers>=0.19.1
+sentencepiece>=0.1.99
 sentence-transformers==2.7.0
 faiss-cpu==1.8.0
+accelerate>=0.20.0
+
 
 # LangChain ecosystem
 langchain==0.2.0
@@ -11,15 +90,15 @@ langchain-community==0.2.0
 langchain-text-splitters==0.2.0
 langchain-huggingface==0.0.3
 
-# Document processing (without heavy local-inference)
-unstructured==0.13.0
+# Content extraction - trafilatura is better for web anyway
+trafilatura==1.6.3
 
 # Web framework
 flask==3.0.0
 flask-cors==4.0.0
 werkzeug==3.0.1
 
-# Vector Database - OpenSearch
+# Vector Database
 opensearch-py==2.4.2
 
 # Utilities
@@ -28,6 +107,3 @@ numpy==1.26.4
 beautifulsoup4==4.12.3
 lxml==5.1.0
 python-dotenv==1.0.0
-
-
-
