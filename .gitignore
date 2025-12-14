@@ -1,0 +1,23 @@
+# Data directories - DO NOT COMMIT
+opensearch-data/
+opensearch-backups/
+data/
+logs/
+
+# Docker
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -9,9 +9,11 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     libmagic1 \
+    gcc \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Copy requirements file first (for better caching)
 COPY requirements.txt .
 
 # Install Python dependencies
@@ -26,6 +28,10 @@ RUN mkdir -p /app/data /app/logs
 
 # Expose port for the API
 EXPOSE 8770
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8770/health || exit 1
 
 # Run the application
 CMD ["python", "app.py"]
