@@ -62,30 +62,29 @@ opensearch_url = f"http://{OPENSEARCH_HOST}:{OPENSEARCH_PORT}"
 # --------------------------------------------------
 
 def fetch_text(url: str) -> str | None:
-    """Basic but reliable text extraction"""
     try:
-        r = requests.get(url, timeout=15, headers={
-            "User-Agent": "Mozilla/5.0"
-        })
+        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
-
         soup = BeautifulSoup(r.text, "html.parser")
 
+        # Remove unwanted tags
         for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
 
-        paragraphs = [
-            p.get_text(strip=True)
-            for p in soup.find_all("p")
-            if len(p.get_text(strip=True)) > 50
-        ]
+        # Extract text from p, div, article
+        texts = []
+        for tag in soup.find_all(["p", "div", "article"]):
+            t = tag.get_text(strip=True)
+            if len(t) > 50:
+                texts.append(t)
 
-        text = "\n\n".join(paragraphs)
+        text = "\n\n".join(texts)
         return text if len(text) > 300 else None
-
     except Exception as e:
         logger.error(f"Fetch failed: {url} → {e}")
         return None
+
+
 
 
 def get_vectorstore(index_name: str):
@@ -109,6 +108,9 @@ def health():
 
 @app.route("/process-urls", methods=["POST"])
 def process_urls():
+    """
+    Fetch URLs, extract full article text, chunk, and index into OpenSearch.
+    """
     data = request.json or {}
     urls = data.get("urls", [])
     index_name = data.get("store_id", INDEX_NAME)
@@ -121,29 +123,35 @@ def process_urls():
     for url in urls:
         text = fetch_text(url)
         if not text:
+            logger.warning(f"No content extracted from {url}")
             continue
 
+        logger.info(f"Fetched {len(text)} chars from {url}")
         docs.append(Document(
             page_content=text,
             metadata={"source": url}
         ))
 
     if not docs:
-        return jsonify({"error": "No content extracted"}), 400
+        return jsonify({"error": "No content extracted from any URL"}), 400
 
+    # Split into smaller chunks with overlap
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100
+        chunk_size=400,    # smaller chunks capture more context
+        chunk_overlap=200  # overlap to keep continuity
     )
-
     chunks = splitter.split_documents(docs)
+    logger.info(f"Created {len(chunks)} chunks for indexing")
 
+    # Index into OpenSearch
     OpenSearchVectorSearch.from_documents(
         documents=chunks,
         embedding=embedding_model,
         index_name=index_name,
         opensearch_url=opensearch_url
     )
+
+    logger.info(f"Indexed {len(chunks)} chunks into OpenSearch index '{index_name}'")
 
     return jsonify({
         "status": "success",
@@ -156,21 +164,25 @@ def process_urls():
 def ask():
     data = request.json or {}
     query = data.get("query")
-    k = int(data.get("k", 5))
+    k = int(data.get("k", 10))  # Increase k to 10 or more for better results
     index_name = data.get("store_id", INDEX_NAME)
 
     if not query:
         return jsonify({"error": "query required"}), 400
 
+    # Get the vector store for the specific index
     vectorstore = get_vectorstore(index_name)
+
+    # Perform similarity search with increased k (top 10 results)
     results = vectorstore.similarity_search(query, k=k)
 
+    # Get the context from the results and the sources
     context = "\n\n".join(d.page_content for d in results)
     sources = list({d.metadata["source"] for d in results})
 
     return jsonify({
         "query": query,
-        "answer": context[:2000],
+        "answer": context[:2000],  # Return up to 2000 characters
         "sources": sources
     })
 
