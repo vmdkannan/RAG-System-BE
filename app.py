@@ -11,14 +11,13 @@ from langchain_community.vectorstores import OpenSearchVectorSearch
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from transformers import pipeline, AutoModelForSeq2SeqLM, AutoTokenizer
+import lcdbaccess as dbaccess
 
 
 # --------------------------------------------------
 # CONFIG
 # --------------------------------------------------
 
-OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
-OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", 9200))
 INDEX_NAME = "rag_index"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -54,18 +53,6 @@ embedding_model = HuggingFaceEmbeddings(
     encode_kwargs={"normalize_embeddings": True}
 )
 
-# --------------------------------------------------
-# OPENSEARCH CLIENT
-# --------------------------------------------------
-
-opensearch_client = OpenSearch(
-    hosts=[{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
-    use_ssl=False,
-    verify_certs=False,
-    connection_class=RequestsHttpConnection
-)
-
-opensearch_url = f"http://{OPENSEARCH_HOST}:{OPENSEARCH_PORT}"
 
 # --------------------------------------------------
 # LLM SUMMARIZER
@@ -119,7 +106,7 @@ def get_vectorstore(index_name: str):
     return OpenSearchVectorSearch(
         index_name=index_name,
         embedding_function=embedding_model,
-        opensearch_url=opensearch_url
+        opensearch_url=dbaccess.opensearch_url
     )
 
 # --------------------------------------------------
@@ -130,7 +117,7 @@ def get_vectorstore(index_name: str):
 def health():
     return jsonify({
         "status": "ok",
-        "opensearch": opensearch_client.cluster.health()
+        "opensearch": dbaccess.opensearch_client.cluster.health()
     })
 
 @app.route("/process-urls", methods=["POST"])
@@ -175,7 +162,7 @@ def process_urls():
         documents=chunks,
         embedding=embedding_model,
         index_name=index_name,
-        opensearch_url=opensearch_url
+        opensearch_url=dbaccess.opensearch_url
     )
 
     return jsonify({
@@ -224,8 +211,8 @@ def delete_index():
     data = request.json or {}
     index_name = data.get("store_id", INDEX_NAME)
 
-    if opensearch_client.indices.exists(index=index_name):
-        opensearch_client.indices.delete(index=index_name)
+    if dbaccess.opensearch_client.indices.exists(index=index_name):
+        dbaccess.opensearch_client.indices.delete(index=index_name)
         return jsonify({"status": "deleted"})
 
     return jsonify({"error": "index not found"}), 404
