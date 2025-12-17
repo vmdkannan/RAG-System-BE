@@ -82,7 +82,8 @@ sentencepiece>=0.1.99
 sentence-transformers==2.7.0
 faiss-cpu==1.8.0
 accelerate>=0.20.0
-
+unstructured==0.18.21
+huggingface-hub
 
 # LangChain ecosystem
 langchain==0.2.0

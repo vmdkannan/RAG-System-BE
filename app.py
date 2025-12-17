@@ -7,19 +7,24 @@ from bs4 import BeautifulSoup
 
 from opensearchpy import OpenSearch, RequestsHttpConnection
 from langchain_huggingface import HuggingFaceEmbeddings
+from huggingface_hub import InferenceClient
 from langchain_community.vectorstores import OpenSearchVectorSearch
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
-from transformers import pipeline, AutoModelForSeq2SeqLM, AutoTokenizer
-import lcdbaccess as dbaccess
-
 
 # --------------------------------------------------
 # CONFIG
 # --------------------------------------------------
 
+OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
+OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", 9200))
 INDEX_NAME = "rag_index"
+
+HF_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+HF_MODEL = "meta-llama/Llama-3.2-3B-Instruct"  
+
 
 # --------------------------------------------------
 # LOGGING
@@ -39,44 +44,64 @@ CORS(app)
 # EMBEDDINGS
 # --------------------------------------------------
 
-# Load a pre-trained Hugging Face model and tokenizer
-model_name = "t5-small"  # You can use other models like 'facebook/bart-large-cnn' for summarization
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-
-# Initialize Hugging Face summarization pipeline
-summarizer = pipeline("summarization", model=model, tokenizer=tokenizer)
-
 embedding_model = HuggingFaceEmbeddings(
     model_name=EMBEDDING_MODEL,
     model_kwargs={"device": "cpu"},
     encode_kwargs={"normalize_embeddings": True}
 )
 
-
 # --------------------------------------------------
-# LLM SUMMARIZER
+# OPENSEARCH CLIENT
 # --------------------------------------------------
 
-summarizer = pipeline(
-    "text2text-generation",
-    model="google/flan-t5-small",
-    device=-1  # CPU
+opensearch_client = OpenSearch(
+    hosts=[{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
+    use_ssl=False,
+    verify_certs=False,
+    connection_class=RequestsHttpConnection
 )
+
+opensearch_url = f"http://{OPENSEARCH_HOST}:{OPENSEARCH_PORT}"
+
+# --------------------------------------------------
+# DIRECT HUGGINGFACE API CALL
+# --------------------------------------------------
+
+def call_huggingface_api(prompt: str, max_tokens: int = 256) -> str:
+    if not HF_TOKEN:
+        raise ValueError("HF_TOKEN environment variable not set")
+
+    client = InferenceClient(api_key=HF_TOKEN)
+
+    try:
+        logger.info(f"Calling HuggingFace chat model: {HF_MODEL}")
+
+        completion = client.chat.completions.create(
+            model=HF_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=0.7,
+            top_p=0.95
+        )
+
+        return completion.choices[0].message.content.strip()
+
+    except Exception as e:
+        logger.exception("Error calling HuggingFace API")
+        raise RuntimeError(f"HuggingFace API error: {e}")
 
 # --------------------------------------------------
 # HELPERS
 # --------------------------------------------------
 
 def fetch_text(url: str) -> str | None:
-    """Basic but reliable text extraction with logging for debugging"""
+    """Fetch main textual content from a URL"""
     try:
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
 
         soup = BeautifulSoup(r.text, "html.parser")
-
-        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
 
         paragraphs = [
@@ -86,27 +111,18 @@ def fetch_text(url: str) -> str | None:
         ]
 
         text = "\n\n".join(paragraphs)
-
-        # Log for manual inspection
-        if text:
-            logger.info(f"✅ Extracted {len(paragraphs)} paragraphs from {url}")
-            logger.debug(f"Extracted text:\n{text[:2000]}...")  # log first 2000 chars
-        else:
-            logger.warning(f"⚠️ No sufficient content extracted from {url}")
-
         return text if len(text) > 300 else None
 
     except Exception as e:
-        logger.error(f"Fetch failed: {url} → {e}")
+        logger.error(f"Failed to fetch URL {url}: {e}")
         return None
-
 
 def get_vectorstore(index_name: str):
     """Return OpenSearchVectorSearch instance"""
     return OpenSearchVectorSearch(
         index_name=index_name,
         embedding_function=embedding_model,
-        opensearch_url=dbaccess.opensearch_url
+        opensearch_url=opensearch_url
     )
 
 # --------------------------------------------------
@@ -117,7 +133,9 @@ def get_vectorstore(index_name: str):
 def health():
     return jsonify({
         "status": "ok",
-        "opensearch": dbaccess.opensearch_client.cluster.health()
+        "opensearch": opensearch_client.cluster.health(),
+        "llm_configured": HF_TOKEN is not None,
+        "llm_model": HF_MODEL
     })
 
 @app.route("/process-urls", methods=["POST"])
@@ -132,37 +150,20 @@ def process_urls():
     docs = []
     for url in urls:
         text = fetch_text(url)
-        if not text:
-            continue
+        if text:
+            docs.append(Document(page_content=text, metadata={"source": url}))
 
-        # Split into paragraphs
-        paragraphs = text.split("\n\n")
-        filtered_paragraphs = [
-            p for p in paragraphs
-            if len(p) > 50 and not any(x in p.lower() for x in ["cookie", "privacy policy", "i agree", "click 'i accept'"])
-        ]
+    if not docs:
+        return jsonify({"error": "No content extracted"}), 400
 
-        for p in filtered_paragraphs:
-            docs.append(Document(page_content=p, metadata={"source": url}))
-
-    # Smaller chunks
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=250,
-        chunk_overlap=50
-    )
-
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = splitter.split_documents(docs)
 
-    for i, chunk in enumerate(chunks):
-        logger.info(f"Chunk {i} ({len(chunk.page_content)} chars): {chunk.page_content[:500]}...")
-
-
-    # Index the chunks in OpenSearch
     OpenSearchVectorSearch.from_documents(
         documents=chunks,
         embedding=embedding_model,
         index_name=index_name,
-        opensearch_url=dbaccess.opensearch_url
+        opensearch_url=opensearch_url
     )
 
     return jsonify({
@@ -171,55 +172,94 @@ def process_urls():
         "chunks_indexed": len(chunks)
     })
 
-
 @app.route("/rag/ask", methods=["POST"])
 def ask():
-    data = request.json or {}
-    query = data.get("query")
-    k = int(data.get("k", 5))
-    index_name = data.get("store_id", INDEX_NAME)
+    try:
+        data = request.json or {}
+        query = data.get("query")
+        k = int(data.get("k", 5))
+        index_name = data.get("store_id", INDEX_NAME)
 
-    if not query:
-        return jsonify({"error": "query required"}), 400
+        if not query:
+            return jsonify({"error": "query required"}), 400
 
-    # Fetch the vectorstore and perform similarity search
-    vectorstore = get_vectorstore(index_name)
-    results = vectorstore.similarity_search(query, k=k)
+        if not HF_TOKEN:
+            return jsonify({"error": "HUGGINGFACE_API_TOKEN not configured"}), 500
 
-    context = "\n\n".join(d.page_content for d in results)
-    sources = list({d.metadata["source"] for d in results})
+        # Get vectorstore and retrieve documents
+        vectorstore = get_vectorstore(index_name)
+        retriever = vectorstore.as_retriever(search_kwargs={"k": k})
+        docs = retriever.invoke(query)
 
-    # Prepare the input for the Hugging Face model
-    input_text = f"Question: {query}\nContext: {context}\nAnswer:"
+        if not docs:
+            return jsonify({
+                "query": query,
+                "answer": "No relevant information found.",
+                "sources": []
+            })
 
-    # Use Hugging Face LLM to generate an answer based on the context
-    # The output of the summarizer pipeline is a list of dictionaries
-    response = summarizer(input_text, max_length=200, min_length=50, do_sample=False)
-    
-    # The output is a list, so extract the generated text correctly
-    answer = response[0]['generated_text']  # Use 'generated_text' for text generation models
+        # Format context and sources
+        context = "\n\n".join(doc.page_content for doc in docs)
+        sources = list({d.metadata["source"] for d in docs})
 
-    return jsonify({
-        "query": query,
-        "answer": answer,
-        "sources": sources
-    })
+        # Create prompt - OPTIMIZED FOR FLAN-T5
+        prompt = f"""Answer this question using only the context provided.
 
+        Context: {context}
+
+        Question: {query}
+
+        Answer:"""
+
+        logger.info(f"Generating answer for: {query}")
+        answer = call_huggingface_api(prompt, max_tokens=256)
+
+        return jsonify({
+            "query": query,
+            "answer": answer,
+            "sources": sources,
+            "num_sources": len(docs)
+        })
+
+    except Exception as e:
+        logger.error(f"Error in /rag/ask: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "Failed to generate answer",
+            "details": str(e)
+        }), 500
 
 @app.route("/delete-index", methods=["DELETE"])
 def delete_index():
     data = request.json or {}
     index_name = data.get("store_id", INDEX_NAME)
 
-    if dbaccess.opensearch_client.indices.exists(index=index_name):
-        dbaccess.opensearch_client.indices.delete(index=index_name)
+    if opensearch_client.indices.exists(index=index_name):
+        opensearch_client.indices.delete(index=index_name)
         return jsonify({"status": "deleted"})
 
     return jsonify({"error": "index not found"}), 404
+
+@app.route("/test-model", methods=["GET"])
+def test_model():
+    """Test if current model is working"""
+    try:
+        test_prompt = "What is 2+2? Answer:"
+        result = call_huggingface_api(test_prompt, max_tokens=50)
+        return jsonify({
+            "status": "working",
+            "model": HF_MODEL,
+            "test_response": result
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "failed",
+            "model": HF_MODEL,
+            "error": str(e)
+        }), 500
 
 # --------------------------------------------------
 # MAIN
 # --------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8770)
+    app.run(host="0.0.0.0", port=8770, debug=False)
