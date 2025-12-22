@@ -4,6 +4,7 @@ import os
 import logging
 import requests
 from bs4 import BeautifulSoup
+import tempfile
 
 from opensearchpy import OpenSearch, RequestsHttpConnection
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -11,6 +12,8 @@ from huggingface_hub import InferenceClient
 from langchain_community.vectorstores import OpenSearchVectorSearch
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
+from langchain_community.document_loaders.pdf import PyPDFLoader
+
 
 # --------------------------------------------------
 # CONFIG
@@ -124,6 +127,26 @@ def get_vectorstore(index_name: str):
         embedding_function=embedding_model,
         opensearch_url=opensearch_url
     )
+    
+def fetch_pdf(file):
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
+
+        loader = PyPDFLoader(tmp_path)
+        documents = loader.load()
+
+        print(f"Loaded {len(documents)} pages")
+        return documents
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to process PDF: {e}")
+
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 # --------------------------------------------------
 # ROUTES
@@ -171,6 +194,51 @@ def process_urls():
         "index": index_name,
         "chunks_indexed": len(chunks)
     })
+    
+
+@app.route("/process-pdf", methods=["POST"])
+def process_pdf():
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["file"]
+
+    # Optional index name from form-data
+    index_name = request.form.get("store_id", INDEX_NAME)
+
+    try:
+        documents = fetch_pdf(file)
+
+        print("Splitting documents into chunks...")
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1500,
+            chunk_overlap=200,
+            length_function=len,
+            separators=["\n\n", "\n", " ", ""]
+        )
+
+        chunks = text_splitter.split_documents(documents)
+        print(f"Created {len(chunks)} chunks")
+
+        OpenSearchVectorSearch.from_documents(
+            documents=chunks,
+            embedding=embedding_model,
+            index_name=index_name,
+            opensearch_url=opensearch_url,
+            bulk_size=1500
+        )
+
+        return jsonify({
+            "status": "success",
+            "index": index_name,
+            "chunks_indexed": len(chunks)
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    
 
 @app.route("/rag/ask", methods=["POST"])
 def ask():
