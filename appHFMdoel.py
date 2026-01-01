@@ -6,7 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 import tempfile
 
-from opensearchpy import OpenSearch
+from opensearchpy import OpenSearch, RequestsHttpConnection
 from langchain_huggingface import HuggingFaceEmbeddings
 from huggingface_hub import InferenceClient
 from langchain_community.vectorstores import OpenSearchVectorSearch
@@ -18,10 +18,10 @@ from langchain_community.document_loaders.pdf import PyPDFLoader
 # --------------------------------------------------
 # CONFIG
 # --------------------------------------------------
-OPENSEARCH_HOST=os.getenv("AWS_OPENSEARCH_HOST")
+
+OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
+OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", 9200))
 INDEX_NAME = "rag_index"
-OPENSEARCH_USERNAME =os.getenv("AWS_OPENSEARCH_USERNAME")
-OPENSEARCH_PASSWORD =os.getenv("AWS_OPENSEARCH_PASSWORD")
 
 HF_TOKEN = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 
@@ -58,13 +58,13 @@ embedding_model = HuggingFaceEmbeddings(
 # --------------------------------------------------
 
 opensearch_client = OpenSearch(
-    hosts=[OPENSEARCH_HOST],
-    http_auth=(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD),
-    use_ssl=True,
-    verify_certs=True,
-    engine="faiss"
+    hosts=[{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
+    use_ssl=False,
+    verify_certs=False,
+    connection_class=RequestsHttpConnection
 )
 
+opensearch_url = f"http://{OPENSEARCH_HOST}:{OPENSEARCH_PORT}"
 
 # --------------------------------------------------
 # DIRECT HUGGINGFACE API CALL
@@ -125,16 +125,7 @@ def get_vectorstore(index_name: str):
     return OpenSearchVectorSearch(
         index_name=index_name,
         embedding_function=embedding_model,
-        opensearch_url=OPENSEARCH_HOST,
-        http_auth=(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD),
-        use_ssl=True,
-        verify_certs=True,
-        engine="faiss",
-        opensearch_kwargs={
-            "timeout": 60,           # seconds
-            "max_retries": 3,
-            "retry_on_timeout": True
-        }
+        opensearch_url=opensearch_url
     )
     
 def fetch_pdf(file):
@@ -190,21 +181,12 @@ def process_urls():
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = splitter.split_documents(docs)
-    
+
     OpenSearchVectorSearch.from_documents(
         documents=chunks,
         embedding=embedding_model,
         index_name=index_name,
-        opensearch_url=OPENSEARCH_HOST,
-        http_auth=(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD),
-        use_ssl=True,
-        verify_certs=True,
-        engine="faiss",
-        opensearch_kwargs={
-            "timeout": 60,           # seconds
-            "max_retries": 3,
-            "retry_on_timeout": True
-        }
+        opensearch_url=opensearch_url
     )
 
     return jsonify({
@@ -243,17 +225,8 @@ def process_pdf():
             documents=chunks,
             embedding=embedding_model,
             index_name=index_name,
-            opensearch_url=OPENSEARCH_HOST,
-            http_auth=(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD),
-            use_ssl=True,
-            verify_certs=True,
-            engine="faiss",
-            bulk_size=1500,
-            opensearch_kwargs={
-            "timeout": 180,           # seconds
-            "max_retries": 3,
-            "retry_on_timeout": True
-            }
+            opensearch_url=opensearch_url,
+            bulk_size=1500
         )
 
         return jsonify({
