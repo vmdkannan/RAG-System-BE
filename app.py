@@ -62,7 +62,10 @@ opensearch_client = OpenSearch(
     http_auth=(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD),
     use_ssl=True,
     verify_certs=True,
-    engine="faiss"
+    engine="faiss",
+    timeout=30,                 # read timeout
+    max_retries=3,
+    retry_on_timeout=True
 )
 
 
